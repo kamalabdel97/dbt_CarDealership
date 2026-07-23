@@ -1,0 +1,10 @@
+version: 2
+
+sources:
+  - name: craigslist
+    database: CRAIGSLIST_DB
+    schema: PUBLIC
+
+    tables:
+      - name: CARINVENTORY
+        description: "Raw Craigslist vehicle listings loaded into Snowflake."

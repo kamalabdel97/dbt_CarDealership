@@ -1,0 +1,10 @@
+models:
+  - name: stg_car_listings
+    description: "Cleaned and standardized view of Craigslist car listings."
+    
+    columns:
+      - name: listing_id
+        description: "Primary key. Unique identifier for each car listing."
+        tests:
+          - unique
+          - not_null
