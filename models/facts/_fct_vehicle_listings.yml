@@ -89,13 +89,16 @@ models:
       - name: record_resolution
         description: >
           Indicates how the listing entered the fact table:
-          automated = passed all automated quality checks
-          approved = flagged by automated checks but manually reviewed and accepted
+          automated = passed all automated quality checks;
+          approved = flagged by automated checks but manually reviewed and accepted;
           updated = corrected by Data Ops and revalidated before entering the fact.
+
         tests:
           - not_null
+
           - accepted_values:
-              values:
-                - automated
-                - approved
-                - updated
+              arguments:
+                values:
+                  - automated
+                  - approved
+                  - updated
