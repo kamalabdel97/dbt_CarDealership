@@ -1,0 +1,101 @@
+version: 2
+
+models:
+  - name: fct_vehicle_listings
+    description: >
+      Historical vehicle listing fact table containing one row per accepted
+      Craigslist listing. Listings may enter automatically after passing data
+      quality checks or may be released after Data Ops approval or correction.
+      Multiple listings for the same VIN are intentionally preserved.
+
+    columns:
+      - name: listing_id
+        description: "Unique identifier for an individual vehicle listing."
+        tests:
+          - unique
+          - not_null
+
+      - name: listing_price
+        description: >
+          Advertised vehicle price after automated quality checks or Data Ops
+          review and correction.
+        tests:
+          - not_null
+
+      - name: vin
+        description: >
+          Vehicle Identification Number used to associate multiple listings
+          with the same physical vehicle.
+        tests:
+          - not_null
+
+      - name: make
+        description: >
+          Standardized vehicle manufacturer. Missing manufacturers may be
+          repaired upstream when they can be determined from the model field.
+        tests:
+          - not_null
+
+      - name: model
+        description: "Standardized vehicle model."
+
+      - name: year
+        description: "Model year of the vehicle."
+
+      - name: mileage
+        description: >
+          Vehicle mileage. Only listings with mileage accepted by the mileage
+          quality rules or successfully resolved through Data Ops are included.
+        tests:
+          - not_null
+
+      - name: fuel_type
+        description: "Standardized fuel type."
+
+      - name: transmission
+        description: "Standardized transmission type."
+
+      - name: drivetrain
+        description: "Standardized drivetrain value."
+
+      - name: exterior_color
+        description: "Standardized exterior vehicle color."
+
+      - name: vehicle_condition
+        description: "Reported condition of the vehicle."
+
+      - name: title_status
+        description: >
+          Vehicle title status. Title statuses permanently excluded upstream,
+          such as Missing, Parts Only, and Salvage, do not enter this fact.
+
+      - name: posting_date
+        description: >
+          Date the listing was posted. Used to order multiple listing
+          observations for the same VIN.
+
+      - name: region
+        description: "Craigslist region associated with the listing."
+
+      - name: state
+        description: "State associated with the listing."
+
+      - name: latitude
+        description: "Latitude associated with the listing location."
+
+      - name: longitude
+        description: "Longitude associated with the listing location."
+
+      - name: record_resolution
+        description: >
+          Indicates how the listing entered the fact table:
+          automated = passed all automated quality checks
+          approved = flagged by automated checks but manually reviewed and accepted
+          updated = corrected by Data Ops and revalidated before entering the fact.
+        tests:
+          - not_null
+          - accepted_values:
+              values:
+                - automated
+                - approved
+                - updated

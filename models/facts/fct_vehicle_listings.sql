@@ -1,5 +1,4 @@
 with automatically_accepted as (
-
     select
         listing_id,
         listing_price,
@@ -19,20 +18,17 @@ with automatically_accepted as (
         state,
         latitude,
         longitude,
-
         'automated' as record_resolution
-
     from {{ ref('int_car_listings_mileage_quality') }}
-
     where price_quality_status = 'accepted'
-      and mileage_quality_status in ('accepted', 'missing')
+      and mileage_quality_status = 'accepted'
       and vin is not null
       and trim(vin) <> ''
       and make is not null
+
 ),
 
 reviewed_and_released as (
-
     select
         listing_id,
         listing_price,
@@ -52,11 +48,8 @@ reviewed_and_released as (
         state,
         latitude,
         longitude,
-
         approval_status as record_resolution
-
     from {{ ref('int_resolved_audit_listings') }}
-
     where vin is not null
       and trim(vin) <> ''
       and make is not null
@@ -65,25 +58,18 @@ reviewed_and_released as (
           (
               approval_status = 'updated'
               and resolved_price_quality_status = 'accepted'
-              and resolved_mileage_quality_status in (
-                  'accepted',
-                  'missing'
-              )
+              and resolved_mileage_quality_status = 'accepted'
           )
 
           or
 
           (
               approval_status = 'approved'
-
               -- Human approval can override a suspicious
-              -- automated threshold, but not impossible
-              -- structural values.
+              -- automated threshold, but not structurally invalid values.
               and listing_price > 0
-              and (
-                  mileage is null
-                  or mileage >= 0
-              )
+              and mileage is not null
+              and mileage >= 0
           )
 
       )

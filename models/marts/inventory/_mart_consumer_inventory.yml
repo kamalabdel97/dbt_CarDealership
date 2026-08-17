@@ -1,13 +1,12 @@
 models:
   - name: mart_consumer_inventory
-    description: "Consumer-ready Craigslist vehicle listings with positive prices and acceptable title statuses"
+    description: "Consumer ready Craigslist vehicle listings with positive prices and acceptable title statuses"
 
     columns:
       - name: listing_id
         tests:
           - unique
           - not_null
-
       - name: listing_price
         tests:
           - not_null
