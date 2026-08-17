@@ -8,3 +8,6 @@ sources:
     tables:
       - name: CARINVENTORY
         description: "Raw Craigslist vehicle listings loaded into Snowflake."
+
+      - name: OPS_LISTING_REVIEW
+        description: "Data Ops review decisions for listings flagged by automated data quality checks."

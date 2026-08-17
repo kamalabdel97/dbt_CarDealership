@@ -1,34 +1,41 @@
-select
+with source as (
 
-    -- Identifier
-    id as listing_id,
+    select *
+    from {{ source('craigslist', 'CARINVENTORY') }}
 
-    -- Affordability
-    price as listing_price,
+),
 
-    -- Vehicle characteristics
-    initcap(replace(manufacturer, '-', ' ')) as make,
-    initcap(model) as model,
-    year,
-    odometer as mileage,
-    initcap(fuel) as fuel_type,
-    initcap(transmission) as transmission,
-    upper(drive) as drivetrain,
-    initcap(replace(paint_color, '_', ' ')) as exterior_color,
-    initcap(condition) as vehicle_condition,
-    initcap(replace(title_status, '_', ' ')) as title_status,
-    vin,
+staged as (
 
-    -- Listing details
-    description,
-    image_url,
-    posting_date,
-    url as listing_url,
+    select
+        id as listing_id,
+        price as listing_price,
+        upper(vin) as vin,
+        initcap(manufacturer) as make,
+        initcap(model) as model,
+        year,
+        odometer as mileage,
+        initcap(fuel) as fuel_type,
+        initcap(transmission) as transmission,
+        upper(drive) as drivetrain,
+        initcap(paint_color) as exterior_color,
+        initcap(condition) as vehicle_condition,
+        initcap(title_status) as title_status,
+        posting_date,
+        initcap(region) as region,
+        upper(state) as state,
+        lat as latitude,
+        long as longitude
 
-    -- Location
-    initcap(region) as region,
-    upper(state) as state,
-    lat as latitude,
-    long as longitude
+    from source
 
-from {{ source('craigslist', 'CARINVENTORY') }}
+)
+
+select *
+from staged
+
+where title_status not in (
+    'Missing',
+    'Parts Only',
+    'Salvage'
+)

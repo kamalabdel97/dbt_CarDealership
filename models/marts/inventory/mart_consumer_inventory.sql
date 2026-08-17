@@ -1,39 +1,4 @@
-with eligible_listings as (
-
-    select
-        listing_id,
-        listing_price,
-        vin,
-        make,
-        model,
-        year,
-        mileage,
-        fuel_type,
-        transmission,
-        drivetrain,
-        exterior_color,
-        vehicle_condition,
-        title_status,
-        posting_date,
-        region,
-        state,
-        latitude,
-        longitude
-
-    from {{ ref('fct_vehicle_listings') }}
-
-    where price_quality_status = 'accepted'
-      and mileage_quality_status in ('accepted', 'missing')
-      and make is not null
-      and title_status not in (
-          'Missing',
-          'Parts Only',
-          'Salvage'
-      )
-
-),
-
-ranked_listings as (
+with ranked_listings as (
 
     select
         *,
@@ -42,7 +7,7 @@ ranked_listings as (
             order by posting_date desc, listing_id desc
         ) as listing_rank
 
-    from eligible_listings
+    from {{ ref('fct_vehicle_listings') }}
 
 )
 
@@ -64,7 +29,8 @@ select
     region,
     state,
     latitude,
-    longitude
+    longitude,
+    record_resolution
 
 from ranked_listings
 
