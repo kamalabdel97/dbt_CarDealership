@@ -3,14 +3,6 @@ with listings as (
     select *
     from {{ ref('int_car_listings_mileage_quality') }}
 
-    -- These title statuses are not sent to Data Ops.
-    -- They are excluded from the usable analytical dataset entirely.
-    where title_status not in (
-        'Missing',
-        'Parts Only',
-        'Salvage'
-    )
-
 ),
 
 ops_reviews as (
@@ -42,6 +34,7 @@ audited_listings as (
         l.latitude,
         l.longitude,
 
+        l.model_quality_status,
         l.price_quality_status,
         l.price_quality_reason,
         l.mileage_quality_status,
@@ -62,6 +55,13 @@ audited_listings as (
             else 0
         end as has_make_issue,
 
+        -- Checks for missing or invalid model
+        case
+            when l.model_quality_status <> 'accepted'
+            then 1
+            else 0
+        end as has_model_issue,
+
         -- Checks for listing price issues
         case
             when l.price_quality_status <> 'accepted'
@@ -71,10 +71,7 @@ audited_listings as (
 
         -- Checks for mileage issues
         case
-            when l.mileage_quality_status not in (
-                'accepted',
-                'missing'
-            )
+            when l.mileage_quality_status <> 'accepted'
             then 1
             else 0
         end as has_mileage_issue,
@@ -94,14 +91,15 @@ audited_listings as (
 
     from listings l
 
-    left join ops_reviews r on l.listing_id = r.listing_id
+    left join ops_reviews r
+        on l.listing_id = r.listing_id
 
 )
 
 select *
 from audited_listings
-
 where has_vin_issue = 1
    or has_make_issue = 1
+   or has_model_issue = 1
    or has_price_issue = 1
    or has_mileage_issue = 1
