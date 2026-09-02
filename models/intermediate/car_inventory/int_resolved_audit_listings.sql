@@ -85,7 +85,15 @@ reclassified as (
             then 'missing'
 
             -- Obvious placeholder values
-            when upper(trim(model)) in ('-', '--', '/', 'N/A', 'NA', 'NONE', 'UNKNOWN')
+            when upper(trim(model)) in (
+                '-',
+                '--',
+                '/',
+                'N/A',
+                'NA',
+                'NONE',
+                'UNKNOWN'
+            )
             then 'invalid'
 
             -- Obvious malformed values such as:
@@ -93,7 +101,12 @@ reclassified as (
             -- *Coming Soon*
             -- / Accord
             -- (300)
-            when left(trim(model), 1) in ('$', '*', '/','(')
+            when left(trim(model), 1) in (
+                '$',
+                '*',
+                '/',
+                '('
+            )
             then 'invalid'
 
             else 'accepted'
@@ -112,7 +125,7 @@ reclassified as (
         case
             when mileage is null then 'missing'
             when mileage < 0 then 'invalid'
-            when mileage >= 1000000 then 'suspicious'
+            when mileage >= 999999 then 'suspicious'
             else 'accepted'
         end as resolved_mileage_quality_status
 

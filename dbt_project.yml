@@ -22,5 +22,14 @@ models:
     staging:
       +materialized: view
 
+    intermediate:
+      +materialized: view
+
+    audits:
+      +materialized: view
+
+    facts:
+      +materialized: table
+
     marts:
       +materialized: table
