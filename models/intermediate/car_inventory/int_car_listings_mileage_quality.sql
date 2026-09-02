@@ -17,8 +17,8 @@ mileage_quality as (
             -- Negative mileage is not a valid odometer reading
             when mileage < 0 then 'invalid'
 
-            -- Mileage at or above 1,000,000 is treated as suspicious
-            -- based on profiling of the extreme upper tail of the dataset
+            -- Mileage at or above 999,999 is treated as suspicious
+            -- to capture obvious placeholder-style values in the extreme upper tail
             when mileage >= 999999 then 'suspicious'
 
             -- All remaining mileage values are considered acceptable

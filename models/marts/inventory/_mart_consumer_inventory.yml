@@ -1,12 +1,30 @@
+version: 2
+
 models:
   - name: mart_consumer_inventory
-    description: "Consumer ready Craigslist vehicle listings with positive prices and acceptable title statuses"
+    description: >
+      Consumer-facing vehicle inventory containing one row per VIN.
+      Each row represents the most recent valid listing available for
+      that physical vehicle.
 
     columns:
-      - name: listing_id
+      - name: vin
+        description: >
+          Vehicle Identification Number. Defines the grain of the mart,
+          with one row per physical vehicle.
         tests:
           - unique
           - not_null
+
+      - name: listing_id
+        description: >
+          Identifier for the listing selected as the most recent valid
+          listing for the VIN.
+        tests:
+          - unique
+          - not_null
+
       - name: listing_price
+        description: "Advertised price of the latest valid vehicle listing."
         tests:
           - not_null
