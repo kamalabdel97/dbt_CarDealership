@@ -1,807 +1,194 @@
-# Craigslist Vehicle Analytics Engineering Project
+# Craigslist Vehicle Analytics Pipeline
 
-## Project Overview
+I bought my first car at 25 and didn't do the interest math until I was already sitting in it. Running payment numbers while you're still shopping is a pain, so most people skip it until the paperwork is in front of them.
 
-This project transforms a historical Craigslist vehicle listings dataset into a cleaner, more reliable analytical dataset using **Snowflake**, **dbt**, and **Power BI**.
+This is a Power BI dashboard that shows monthly payment, total interest, and amortization schedule for any vehicle in the inventory. It runs on a one-time snapshot of 350K+ Craigslist listings, cleaned through a Snowflake and dbt pipeline.
 
-The source data contains several real-world data quality problems, including:
+**Snowflake** for storage, **dbt** for transformation, quality classification, and testing, **Power BI** for consumer inventory and loan analysis.
 
-- missing manufacturers
-- make values embedded inside model names
-- invalid or suspicious prices
-- implausible mileage values
-- missing VINs
-- repeated listings for the same VIN
-- records that should not be shown in consumer-facing inventory
+<p align="center">
+  <img width="440" height="330" alt="image" src="https://github.com/user-attachments/assets/740a5fc1-df60-4c79-8261-d62abe289c75" />
+  <img width="440" height="330" alt="image" src="https://github.com/user-attachments/assets/13fc9026-2210-4938-a69b-f73c6da4d4a1" />
+  <img width="440" height="330" alt="image" src="https://github.com/user-attachments/assets/c132fef3-85d4-4b32-8b83-50c9857b65df" />
+</p>
 
-The goal of the project is to preserve useful vehicle listing history while preventing known bad records from reaching the final consumer inventory.
+**[View the live dashboard](#)**
 
-The pipeline also includes a theoretical Data Operations review process so questionable records can be reviewed, corrected, approved, or rejected instead of simply being deleted.
+## Why the pipeline exists
 
----
+The calculator itself is arithmetic. Most of the work went into making sure the price it runs on can be trusted.
 
-## Technology Stack
+The raw listings arrived with problems that would each break the dashboard in a different way:
 
-- **Snowflake** — data storage and persistent Operations review table
-- **dbt** — transformation, data quality classification, lineage, and documentation
-- **SQL** — transformation and business-rule logic
-- **Power BI** — consumer inventory, affordability analysis, and reporting
-- **dbt seeds** — manufacturer reference data used during make/model cleanup
+| Problem in the data | What it does to the dashboard |
+|---|---|
+| Asking prices of $0 or negative | Payment of $0 on a real car |
+| Odometer readings in the millions | Vehicle looks worthless, or filters break |
+| Missing manufacturer, make buried in the model name | Car can't be found by search |
+| Same vehicle posted repeatedly at different prices | Which price is the real one? |
+| Missing VIN | No way to tell two listings apart |
 
----
+The obvious fix is to delete anything that looks wrong, but that throws away real cars. Some trucks legitimately have 600,000 miles. Some vehicles legitimately cost $150,000.
 
-# Prerequisite: Operations Review Table
+So the pipeline classifies records instead of deleting them. Records that pass the rules go straight through. Questionable ones get routed to a review queue where a reviewer can approve, correct, or reject them, and anything corrected is re-checked against the same rules before it's allowed back in.
 
-Before the audit and review workflow can operate, a persistent writable table must exist in Snowflake.
+There's no actual reviewer on this project. What's built is the machinery around one: a persistent review table in Snowflake that survives dbt rebuilds, the four decision states, and the logic that revalidates and reintegrates corrected records. A production version would add a review interface, access controls, and ownership.
 
-This table is kept outside dbt because human review decisions need to remain stored even when dbt models are rebuilt.
+<!-- TODO: add counts: total listings in, clean, flagged for review, rejected -->
 
-Example:
+## How it works
 
-```sql
-create table if not exists OPS_LISTING_REVIEW (
-    listing_id number,
-    approval_status varchar default 'pending',
-
-    corrected_vin varchar,
-    corrected_make varchar,
-    corrected_model varchar,
-    corrected_listing_price number,
-    corrected_mileage number,
-    corrected_title_status varchar,
-
-    review_notes varchar,
-    reviewed_at timestamp_ntz
-);
+```
+raw listings
+     ↓
+  staging          standardize columns, drop salvage/parts-only titles
+     ↓
+ intermediate      repair make/model, classify price, classify mileage
+     ↓
+   ┌─────────────┴─────────────┐
+   ↓                           ↓
+passes rules              flagged for review
+   │                           ↓
+   │                    approve / correct / reject
+   │                           ↓
+   │                    corrected records revalidated
+   ↓                           ↓
+   └─────────────┬─────────────┘
+                 ↓
+        fct_vehicle_listings      every valid listing, full history
+                 ↓
+      mart_consumer_inventory     latest valid listing per vehicle
+                 ↓
+             Power BI
 ```
 
-The table is also declared as a dbt source so the audit models can connect automated quality findings with any existing Operations decisions.
+Rejected records aren't deleted either. They're held in a quarantine model so there's a record of what was excluded and why.
 
-Supported review statuses:
+## The models
 
-```text
-pending   → waiting for review
-approved  → flagged value was reviewed and confirmed as valid
-updated   → Operations supplied one or more corrected values
-rejected  → listing should remain excluded from analytics
-```
+| Model | Grain | What it does |
+|---|---|---|
+| `stg_car_listings` | one row per source listing | Renames raw columns. Permanently drops salvage, parts-only, and missing-title vehicles, which are out of scope for a consumer tool rather than a quality problem to review. |
+| `int_car_listings_make_model_cleanup` | one row per listing | Recovers a missing make when it's sitting at the front of the model name (`Genesis G70 3.3T` becomes make `Genesis`, model `G70 3.3T`). The manufacturer list lives in a dbt seed rather than a hardcoded CASE. Misspellings like `Chevorlet` are left alone and sent to review. |
+| `int_car_listings_price_quality` | one row per listing | Classifies price as accepted, missing, non-positive, suspiciously low, or suspiciously high. No statistical cutoff, since a $150K truck is unusual and real. |
+| `int_car_listings_mileage_quality` | one row per listing | Same pattern. Flags at 999,999 miles to catch placeholder values rather than at 500K, because legitimate commercial vehicles run well past half a million. Missing mileage goes to review. |
+| `audit_listing_quality` | one row per problematic listing | A single review queue rather than four. Flag columns show every issue on a listing at once. |
+| `int_resolved_audit_listings` | one row per approved or corrected record | Applies reviewer corrections, then re-runs the quality rules on them. A human edit doesn't exempt a record from the checks. |
+| `fct_vehicle_listings` | one row per accepted listing | Every valid listing, repeat postings included. `record_resolution` tracks how each row got in: automated, approved, or updated. |
+| `mart_consumer_inventory` | one row per vehicle (VIN) | Latest valid listing per vehicle. If the newest posting has a $0 price, the last good listing stays visible until it's fixed. |
+| `quarantine_rejected_listings` | one row per rejected listing | Kept out of the dashboard, kept on the record. |
 
-The separation is intentional:
+### Materialization strategy
 
-```text
-dbt
-→ identifies questionable records
+| Layer | Materialization | Why |
+|---|---|---|
+| staging | view | Source standardization |
+| intermediate | view | Transformation and quality classification |
+| audits | view | Reflects the current review state |
+| facts | table | Persisted analytical listing history |
+| marts | table | Persisted consumer-facing output |
 
-OPS_LISTING_REVIEW
-→ stores the human decision
-```
+The audit models are views on purpose. `audit_listing_quality` joins live listings against `OPS_LISTING_REVIEW`, which is a table a human writes to, so a reviewer's decision shows up in the queue the moment it's made, with no rebuild.
 
----
+The fact and mart are tables, which means the opposite is also true. An approved or corrected listing doesn't reach `fct_vehicle_listings` or the dashboard until the next dbt run. Review happens immediately, but release happens on rebuild.
 
-# Pipeline Overview
+## Testing
 
-```text
-Raw vehicle listings
-        ↓
-stg_car_listings
-        ↓
-int_car_listings_make_model_cleanup
-        ↑
- manufacturers seed
-        ↓
-int_car_listings_price_quality
-        ↓
-int_car_listings_mileage_quality
-        │
-        ├──────────────→ audit_listing_quality
-        │                     ↑
-        │              OPS_LISTING_REVIEW
-        │                     ↓
-        │          int_resolved_audit_listings
-        │                     │
-        │                     └─────────────┐
-        │                                   │
-        └──── automatically accepted ───────┤
-                                            ↓
-                                 fct_vehicle_listings
-                                            ↓
-                                 mart_consumer_inventory
+Tests are written against each model's grain, since that's what breaks silently.
 
-Rejected review decisions
-        ↓
-quarantine_rejected_listings
-```
+| Model | Test | What it proves |
+|---|---|---|
+| `stg_car_listings` | `listing_id` unique, not null | Source arrives at listing grain |
+| `fct_vehicle_listings` | `listing_id` unique, not null | No listing enters the fact twice, even though records arrive from two branches |
+| `fct_vehicle_listings` | `listing_price`, `vin`, `make`, `mileage` not null | The four fields the acceptance rules require are actually present |
+| `fct_vehicle_listings` | `record_resolution` in `automated`, `approved`, `updated` | Every row can account for how it got in |
+| `mart_consumer_inventory` | `vin` unique, not null | One row per physical vehicle, which is the mart's entire contract |
 
-## Pipeline Flow in Plain English
+Three singular tests assert business rules rather than column properties:
 
-The raw vehicle listings first go through basic cleanup so the column names and values are easier to work with.
+- `assert_consumer_inventory_positive_price` checks that no $0 or negative prices reach the dashboard
+- `assert_consumer_inventory_valid_coordinates` checks that latitude and longitude stay in range, so map visuals don't break
+- `assert_staging_excludes_title_status` checks that salvage, parts-only, and missing-title vehicles are dropped at staging
 
-Next, the pipeline attempts to repair make and model information when the correct answer can be determined confidently.
+The `unique` test on `fct_vehicle_listings.listing_id` is the most important one. That model is a `union all` of automatically accepted listings and reviewer-released ones. If the branch conditions ever overlap, say a listing satisfies both the automated rules and an `approved` review decision, the same car would appear twice with two different `record_resolution` values, and nothing else in the pipeline would catch it.
 
-After that, prices and mileage values are checked for obvious problems. These checks do not immediately delete questionable records. Instead, each record is classified so the pipeline knows whether it can be accepted automatically or needs review.
+## Running this yourself
 
-Listings that pass the automated rules are allowed into the historical vehicle listing table.
+This was built in dbt Cloud against Snowflake, so reproducing it requires your own accounts for both. The models, seeds, and setup SQL are all here, but the connection configuration is environment-specific.
 
-Listings with reviewable problems are sent to one audit queue. A Data Operations user could then:
+<!-- TODO: verify these steps before publishing -->
 
-- approve the original value
-- provide a corrected value
-- reject the listing
-- leave it pending for later review
+**Prerequisites**
+- Snowflake account
+- dbt Cloud account
+- Power BI Desktop
 
-Approved or successfully corrected listings are allowed back into the historical listing table.
+**Setup**
 
-Rejected listings remain outside the analytical dataset but are retained separately for traceability.
+1. Fork or clone this repo
+   ```bash
+   git clone <!-- TODO: repo url -->
+   ```
 
-Finally, the consumer inventory keeps only the latest valid listing for each VIN. If a newer listing is bad, the previous valid listing remains the consumer-facing record until the newer one is corrected or approved.
+2. Load the Craigslist dataset into `CRAIGSLIST_DB.PUBLIC.CARINVENTORY`
+   <!-- TODO: dataset link and row count -->
 
----
+3. Create the operations review table in `CRAIGSLIST_DB.PUBLIC`
 
-# Source Grain and Repeated VINs
+   This table lives outside dbt on purpose. Review decisions are human input, and
+   dbt rebuilds its own models, so anything dbt owned would be wiped on the next run.
+   It's declared as a dbt source so the audit models can read it.
 
-The original dataset is listing-level data.
+   ```sql
+   create table if not exists OPS_LISTING_REVIEW (
+       listing_id number,
+       approval_status varchar default 'pending',
 
-```text
-listing_id = identifies one Craigslist listing
-vin        = identifies the physical vehicle
-```
+       corrected_vin varchar,
+       corrected_make varchar,
+       corrected_model varchar,
+       corrected_listing_price number,
+       corrected_mileage number,
+       corrected_title_status varchar,
 
-A single VIN can therefore appear in multiple listings.
+       review_notes varchar,
+       reviewed_at timestamp_ntz
+   );
+   ```
 
-For example:
+   `approval_status` drives the review workflow:
 
-```text
-VIN ABC123
-├── September listing
-├── October listing
-└── November listing
-```
+   | Status | Meaning |
+   |---|---|
+   | `pending` | Flagged, no decision yet. Stays out of the fact. |
+   | `approved` | Reviewer confirmed the flagged value is legitimate. Released. |
+   | `updated` | Reviewer supplied corrected values. Revalidated, then released if it passes. |
+   | `rejected` | Excluded for good, retained in quarantine for traceability. |
 
-These repeated VINs are intentionally preserved because they represent separate listing observations.
+4. Connect the repo to a dbt Cloud project pointed at your Snowflake connection
 
-They are not automatically treated as duplicate records.
+5. Build the pipeline
+   ```bash
+   dbt seed
+   dbt run
+   dbt test
+   ```
 
----
+6. Open the dashboard and repoint it at your Snowflake connection
+   <!-- TODO: .pbix path in repo -->
 
-# Model Responsibilities
+## What this pipeline can't do
 
-## `stg_car_listings`
+**Some makes can't be recovered.** The seed lookup repairs a missing manufacturer only when it sits at the front of the model name. Misspellings (`Chevorlet`), models with no make attached (`Grand Caravan`), and junk values (`Series`, `2011`) are left unresolved and sent to review.
 
-**Grain:** one row per source listing.
+**Listings without a VIN don't make it in.** VIN is how the pipeline knows two postings describe the same car. Without one, a listing can't be deduplicated or shown in inventory, so it's treated as a quality issue.
 
-The staging model standardizes the raw fields into cleaner, consistent names.
+**Repeat listings are advertised prices, not price changes.** `fct_vehicle_listings` keeps every posting for a VIN, and some of those prices bounce around over short windows because of reposts, syndication, or multiple ads for one car. The fact preserves what was advertised and when. It doesn't prove a seller lowered their price.
 
-The staging model standardizes the raw source columns using aliases like:
+**The inventory is historical, not live.** The latest valid listing for a VIN is the most recent one in this dataset. It says nothing about whether the car is still for sale.
 
-```sql
-select
-    id as listing_id,
-    price as listing_price,
-    vin,
-    manufacturer as make,
-    model,
-    year,
-    odometer as mileage,
-    fuel as fuel_type,
-    transmission,
-    drive as drivetrain,
-    paint_color as exterior_color,
-    condition as vehicle_condition,
-    title_status,
-    posting_date,
-    region,
-    state,
-    lat as latitude,
-    long as longitude
-```
+**There's no real reviewer.** The review table, decision states, and revalidation logic all work, but the human is hypothetical. Production would need an interface, access controls, and someone who owns the queue.
 
-The staging model also removes title statuses that the project does not want anywhere in the downstream analytical dataset:
+**This is a static pipeline.** The dataset is a historical snapshot loaded into Snowflake once. There's no ingestion layer, no scheduled refresh, and no incremental logic, so every `dbt run` rebuilds from the same source table. The models are built at listing grain with a fact and mart split, so incremental materialization and a scheduled job could be added later without redesigning them.
 
-```text
-Missing
-Parts Only
-Salvage
-```
-
-These are treated as permanent exclusions rather than records that need Operations review.
-
----
-
-## `manufacturers` Seed
-
-The manufacturer seed is reference data used to repair listings where `make` is missing but the manufacturer appears at the beginning of `model`.
-
-Example source record:
-
-```text
-make  = NULL
-model = Genesis G70 3.3T Sedan
-```
-
-Using the manufacturer seed, the pipeline can produce:
-
-```text
-make  = Genesis
-model = G70 3.3T Sedan
-```
-
-Using a seed keeps the logic maintainable and avoids a large hardcoded manufacturer `CASE` statement.
-
----
-
-## `int_car_listings_make_model_cleanup`
-
-**Grain:** one row per listing.
-
-This model repairs make/model combinations when the correct answer can be determined confidently.
-
-The general rule is:
-
-```text
-If make already exists
-→ keep it
-
-If make is missing
-and model begins with a recognized manufacturer
-→ populate make
-→ remove the manufacturer name from model
-
-If the answer is unclear
-→ leave the value unresolved
-```
-
-### Limitation
-
-The model deliberately avoids guessing.
-
-Examples such as:
-
-```text
-Chevorlet Impala
-Nisaan Altima
-Olet Silverado
-Grand Caravan
-Series
-2011
-```
-
-may still require additional mappings or human review.
-
-The project favors a conservative rule:
-
-> Automatically repair what can be identified confidently and avoid inventing values when the source is ambiguous.
-
----
-
-## `int_car_listings_price_quality`
-
-**Grain:** one row per listing.
-
-This model classifies listing prices.
-
-Current logic:
-
-```sql
-case
-    when listing_price is null then 'missing'
-    when listing_price <= 0 then 'invalid_nonpositive'
-    when listing_price < 500 then 'suspiciously_low'
-    when listing_price > 1000000 then 'suspiciously_high'
-    else 'accepted'
-end as price_quality_status
-```
-
-A separate reason field explains why the record was classified that way.
-
-### Why a simple statistical cutoff was not used
-
-The dataset contains legitimately expensive vehicles and commercial vehicles.
-
-A price can be statistically unusual without being wrong.
-
-For that reason, the project does not treat every outlier as invalid.
-
-Instead, the price rules focus on values that are clearly questionable for the intended consumer inventory.
-
----
-
-## `int_car_listings_mileage_quality`
-
-**Grain:** one row per listing.
-
-Mileage profiling showed extreme values reaching into the millions.
-
-However, inspection also showed legitimate-looking commercial vehicles with mileage well above 500,000.
-
-Using 500,000 as a hard cutoff would therefore remove valid truck listings.
-
-The project uses a more conservative rule:
-
-```sql
-case
-    when mileage is null then 'missing'
-    when mileage < 0 then 'invalid'
-    when mileage >= 1000000 then 'suspicious'
-    else 'accepted'
-end as mileage_quality_status
-```
-
-This isolates the most extreme values without aggressively removing legitimate high-mileage commercial vehicles.
-
-The quality model still labels null mileage as `missing` so the original data-quality condition is preserved. However, missing mileage is no longer considered sufficient for automatic inclusion in `fct_vehicle_listings`.
-
-For the analytical fact, mileage must be present and accepted. A listing with missing mileage is treated as a reviewable issue rather than being automatically released.
-
----
-
-# Unified Audit Workflow
-
-## `audit_listing_quality`
-
-**Grain:** one row per problematic listing.
-
-Instead of creating separate operational files for:
-
-- missing VIN
-- unresolved make
-- price issues
-- mileage issues
-
-the project consolidates them into one review queue.
-
-Example issue fields:
-
-```text
-has_vin_issue
-has_make_issue
-has_price_issue
-has_mileage_issue
-```
-
-For mileage, anything other than `accepted` is treated as an issue for this workflow. That includes:
-
-```text
-missing
-invalid
-suspicious
-```
-
-This matches the current fact-table rule that automatically accepted listings must contain usable mileage.
-
-A listing can have more than one issue while still appearing only once in the audit table.
-
-Example:
-
-| listing_id | has_vin_issue | has_make_issue | has_price_issue | has_mileage_issue |
-|---|---:|---:|---:|---:|
-| 12345 | 0 | 1 | 1 | 0 |
-
-This tells Operations exactly what is wrong with the listing without requiring them to search across several audit tables.
-
-If a matching decision does not already exist in `OPS_LISTING_REVIEW`, the audit record defaults to:
-
-```text
-approval_status = pending
-```
-
----
-
-# Operations Review Decisions
-
-The theoretical review process supports four outcomes.
-
-## `pending`
-
-The listing has been flagged but no decision has been made yet.
-
-It remains outside the analytical fact.
-
----
-
-## `approved`
-
-Operations confirms that the original flagged value is legitimate.
-
-Example:
-
-```text
-Automated result:
-price is suspiciously high
-
-Operations review:
-the vehicle is legitimately expensive
-
-Decision:
-approved
-```
-
-The original record can then be released into the fact.
-
----
-
-## `updated`
-
-Operations provides corrected values.
-
-Example:
-
-```text
-Original price: $0
-Corrected price: $22,000
-Decision: updated
-```
-
-The corrected values are checked again against the quality rules before the record is allowed into the fact.
-
----
-
-## `rejected`
-
-Operations determines that the listing should not be used.
-
-It remains outside the fact and consumer inventory.
-
-The record is retained separately so there is still a history of what was rejected and why.
-
----
-
-# `int_resolved_audit_listings`
-
-**Grain:** one row per approved or updated audit record.
-
-This model prepares reviewed records for reintegration.
-
-For an `updated` record, the corrected values replace the original values where supplied.
-
-The corrected price and mileage are then reclassified.
-
-Conceptually:
-
-```text
-record fails automated checks
-        ↓
-Operations updates it
-        ↓
-corrected values applied
-        ↓
-quality rules run again
-        ↓
-if valid → release to fact
-```
-
-This prevents a manually edited record from bypassing the project's quality rules simply because someone changed it.
-
----
-
-# `fct_vehicle_listings`
-
-**Grain:** one row per accepted listing ID.
-
-This model contains the valid historical listing observations.
-
-Two groups of records can enter:
-
-```text
-1. listings that passed automatically
-2. listings that were approved or successfully corrected
-```
-
-For automatic acceptance, a listing must have:
-
-```text
-accepted price
-accepted mileage
-usable VIN
-resolved make
-```
-
-Missing mileage does not enter the fact automatically.
-
-For an `updated` audit record, the corrected price and mileage are rechecked and both must pass the applicable quality rules before the listing is released.
-
-An `approved` record can be used as a human override for a value that was automatically classified as suspicious, but it still cannot contain structurally unusable values such as a missing VIN, missing make, nonpositive price, missing mileage, or negative mileage.
-
-Conceptually:
-
-```sql
-automatically accepted listings
-
-union all
-
-reviewed and released listings
-```
-
-The model also includes `record_resolution`, which identifies how the record entered the fact:
-
-```text
-automated
-approved
-updated
-```
-
----
-
-## Why Multiple Listings for the Same VIN Stay in the Fact
-
-The fact intentionally preserves repeated VINs.
-
-Example:
-
-```text
-VIN ABC123
-
-September → $25,000
-October   → $24,000
-November  → $22,500
-```
-
-This means the data model is capable of supporting future analysis such as:
-
-- number of listings for a VIN
-- average advertised price
-- minimum advertised price
-- maximum advertised price
-- first observed price
-- latest observed price
-- advertised prices across posting dates
-
-### Important Current-State Note
-
-The current Power BI implementation does **not** yet use `fct_vehicle_listings` as a separate related model for historical advertised-price analysis.
-
-There is currently no Power BI one-to-many VIN relationship or price-over-time visual built from this fact table.
-
-The fact is intentionally modeled at listing grain so that this analysis can be added later without redesigning the dbt pipeline.
-
-The current Power BI experience is centered on the consumer inventory mart.
-
----
-
-## Historical Pricing Limitation
-
-The project does not claim that repeated listings represent a perfect sequence of confirmed seller price changes.
-
-During profiling, some VINs showed prices alternating between values over short periods.
-
-Possible explanations include:
-
-- reposting
-- multiple advertisements
-- dealer syndication
-- other source behavior that is not captured in the dataset
-
-For that reason, the project describes the fact as preserving:
-
-> **historical advertised-price observations**
-
-rather than confirmed vehicle price-change events.
-
----
-
-# `mart_consumer_inventory`
-
-**Grain:** one row per VIN.
-
-This is the current primary dataset used by the Power BI consumer-facing experience.
-
-The mart selects the latest valid listing from `fct_vehicle_listings` for each VIN.
-
-Core logic:
-
-```sql
-row_number() over (
-    partition by vin
-    order by posting_date desc, listing_id desc
-) as listing_rank
-```
-
-and keeps:
-
-```sql
-where listing_rank = 1
-```
-
-This creates a **last known good listing** strategy.
-
----
-
-## Example: Newest Listing Has a Bad Price
-
-Suppose one VIN has:
-
-| Month | Price | Result |
-|---|---:|---|
-| September | $25,000 | Accepted |
-| October | $24,000 | Accepted |
-| November | $0 | Invalid |
-
-Initially:
-
-```text
-fct_vehicle_listings
-├── September → $25,000
-└── October   → $24,000
-```
-
-November goes to the audit queue.
-
-The consumer inventory continues to show:
-
-```text
-October → $24,000
-```
-
-because it is the latest valid record.
-
-If Operations later corrects November to `$22,000`:
-
-```text
-November
-→ corrected
-→ revalidated
-→ enters fact
-```
-
-the fact becomes:
-
-```text
-September → $25,000
-October   → $24,000
-November  → $22,000
-```
-
-and the consumer inventory automatically changes to:
-
-```text
-November → $22,000
-```
-
-because November is now the latest valid listing.
-
----
-
-# `quarantine_rejected_listings`
-
-Rejected listings are not physically deleted from the review workflow.
-
-Records with:
-
-```text
-approval_status = rejected
-```
-
-are retained separately.
-
-This acts like a controlled junk folder:
-
-```text
-rejected
-→ not in historical fact
-→ not in consumer inventory
-→ still available for traceability
-```
-
-This keeps rejected records from contaminating downstream reporting while preserving a record of the decision.
-
----
-
-# Current Power BI Usage
-
-The Power BI dashboard currently uses the consumer inventory mart as its primary vehicle dataset.
-
-This supports:
-
-- vehicle filtering
-- latest valid advertised price
-- make/model selection
-- mileage filtering
-- geographic attributes
-- vehicle affordability calculations
-- loan calculations
-
-The dbt project also produces `fct_vehicle_listings`, but the historical listing fact has **not yet been connected as a separate one-to-many Power BI model**.
-
-That is a future extension rather than a completed dashboard feature.
-
-A future Power BI model could use:
-
-```text
-mart_consumer_inventory
-        1
-        │ VIN
-        │
-        ∞
-fct_vehicle_listings
-```
-
-to support historical advertised-price analysis for the selected vehicle.
-
-The key point is that the dbt pipeline already preserves the necessary listing history even though the current report does not yet visualize it.
-
----
-
-# Known Limitations and Workarounds
-
-## Make/model quality
-
-Some manufacturer information can be recovered from the model field using a controlled manufacturer reference list.
-
-Ambiguous and misspelled values cannot always be corrected safely.
-
-**Workaround:** automatically repair only deterministic matches and send unresolved reviewable cases through the audit process.
-
----
-
-## Price outliers
-
-The dataset contains both obvious bad values and legitimately expensive vehicles.
-
-A simple statistical outlier cutoff would remove valid records.
-
-**Workaround:** use broad business-rule classifications and allow human approval for legitimate exceptions.
-
----
-
-## Mileage quality
-
-Some extreme mileage values are clearly suspicious, but high mileage is legitimate for commercial vehicles. Missing mileage is also a problem for the current consumer-ready fact because mileage is an important vehicle attribute in the downstream experience.
-
-**Workaround:** use a conservative million-mile threshold for suspicious values, preserve `missing` as a separate quality status, and require `accepted` mileage for automatic entry into `fct_vehicle_listings`. Missing, invalid, or suspicious mileage is handled through the review workflow rather than automatically entering the fact.
-
----
-
-## Missing VINs
-
-A VIN is needed to confidently connect multiple listings to the same physical vehicle.
-
-**Workaround:** listings without a usable VIN do not enter the VIN-based fact or consumer inventory and are treated as reviewable quality issues.
-
----
-
-## Repeated VINs
-
-The same vehicle may appear in many listings.
-
-These are not automatically duplicates because each listing has its own listing ID and posting date.
-
-**Workaround:** preserve repeated VINs in the historical fact while reducing the consumer inventory to one latest valid listing per VIN.
-
----
-
-## Historical pricing interpretation
-
-Repeated listings do not prove that every price difference represents a confirmed seller price change.
-
-**Workaround:** describe the data as historical advertised-price observations rather than confirmed price-change history.
-
----
-
-## Consumer inventory freshness
-
-The dataset is historical and does not prove whether a vehicle remained available after its latest observed posting.
-
-**Workaround:** the mart represents the latest valid observation available in the dataset, not guaranteed real-time inventory availability.
-
----
-
-## Human review workflow
-
-The Operations review process is demonstrated through a persistent review table and dbt logic.
-
-A production implementation would require an actual review interface, access controls, and clear ownership.
-
-**Workaround for the portfolio project:** model the review states and reintegration logic in Snowflake/dbt to demonstrate how the workflow would operate.
-
----
-
-# Project Takeaway
-
-This project is about turning messy vehicle listings into data that is safer and easier to use.
-
-Rather than deleting anything that looks unusual, the pipeline first tries to understand whether the record can be trusted.
-
-Some problems can be fixed automatically. Others are set aside for review. Records that pass the checks are kept as part of the vehicle's listing history, while the consumer inventory only shows the most recent valid listing for each vehicle.
-
-The result is a pipeline that keeps useful history, avoids showing obvious bad data, and still provides a path for questionable records to be corrected and returned to the dataset.
-
-It also leaves room for the project to grow. The historical listing fact already exists, so future Power BI work can add vehicle-level advertised-price history without rebuilding the underlying dbt model.
+**Price and mileage rules are duplicated.** The quality thresholds appear once in the intermediate models and again in `int_resolved_audit_listings`, which re-checks corrected values. They've already drifted apart once. A macro would define each rule in one place and call it from both, which is the next refactor.
