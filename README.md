@@ -7,12 +7,13 @@ This is a Power BI dashboard that shows monthly payment, total interest, and amo
 **Snowflake** for storage, **dbt** for transformation, quality classification, and testing, **Power BI** for consumer inventory and loan analysis.
 
 <p align="center">
-  <img width="440" height="330" alt="image" src="https://github.com/user-attachments/assets/740a5fc1-df60-4c79-8261-d62abe289c75" />
-  <img width="440" height="330" alt="image" src="https://github.com/user-attachments/assets/13fc9026-2210-4938-a69b-f73c6da4d4a1" />
-  <img width="440" height="330" alt="image" src="https://github.com/user-attachments/assets/c132fef3-85d4-4b32-8b83-50c9857b65df" />
+<img width="500" height="400" alt="image" src="https://github.com/user-attachments/assets/db5a8d15-a95c-4249-b12d-7f177362272a" />
+<img width="500" height="400" alt="image" src="https://github.com/user-attachments/assets/9d1ee412-e347-481c-8e0d-362f6e75edda" />
+<img width="500" height="400" alt="image" src="https://github.com/user-attachments/assets/88ed116b-56ad-45e4-a048-20385283c065" />
+
 </p>
 
-**[View the live dashboard](#)**
+**[View the live dashboard]([#](https://app.powerbi.com/groups/me/reports/6908c6f7-ad99-4c90-a26c-b6e4aeb8ee77/5f89551261b6c3a9004c?experience=power-bi&bookmarkGuid=9242c9ce98250d100ec7))**
 
 ## Why the pipeline exists
 
